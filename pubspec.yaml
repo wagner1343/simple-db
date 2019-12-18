@@ -1,12 +1,11 @@
 name: simple_db
 description: A simple noSQL database implementation
-version: 0.0.1
-author:
-homepage:
+version: 0.0.2
+homepage: https://github.com/wagner1343/simple-db
 
 environment:
   sdk: ">=2.1.0 <3.0.0"
 
 dependencies:
-  path_provider: 1.1.0
-  sembast: 2.0.1
+  path_provider: ^1.1.0
+  sembast: ^2.0.1
