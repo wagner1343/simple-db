@@ -9,75 +9,82 @@ import 'package:sembast/sembast_io.dart';
 
 abstract class Mapper<T> {
   T fromMap(Map<dynamic, dynamic> map);
-  dynamic getId(T t);
+
   Map<dynamic, dynamic> toMap(T t);
 }
 
-abstract class StorageEvent<T> {
+abstract class Identifiable {
+  dynamic id;
+}
+
+abstract class StorageEvent<T extends Identifiable> {
   T data;
+
   StorageEvent({this.data});
 }
 
-class SaveEvent<T> extends StorageEvent<T>{
+class SaveEvent<T extends Identifiable> extends StorageEvent<T> {
   SaveEvent(T data) : super(data: data);
 }
 
-class DeleteEvent<T> extends StorageEvent<T>{
+class DeleteEvent<T extends Identifiable> extends StorageEvent<T> {
   DeleteEvent(T data) : super(data: data);
 }
 
-class Storage<T> {
-  StreamController<StorageEvent> _eventsController = StreamController<StorageEvent>.broadcast();
+class Storage<T extends Identifiable> {
+  StreamController<StorageEvent> _eventsController =
+      StreamController<StorageEvent>.broadcast();
+
   Stream get events => _eventsController.stream;
 
   Mapper<T> mapper;
   String dbName;
+  String storeName;
 
-  Storage(this.mapper, {this.dbName}) {
-    dbName = dbName ?? T.toString();
+  Storage(this.mapper, {this.dbName, this.storeName}) {
+    storeName = storeName ?? T.toString();
+    dbName = dbName ?? "data.db";
   }
 
-  Future<dynamic> delete(T data) async {
+  Stream<List<T>> stream() async *{
+    var db = await _openDB();
+    yield* storeRef.query().onSnapshots(db).map<List<T>>((snapshots) => mapSnapshots(snapshots));
+  }
+
+  Future delete(T data) async {
     Database db;
-    dynamic k;
 
-    try{
-      db = await open();
-      k = db.delete(mapper.getId(data));
-      if(k != null)
-        _eventsController.add(DeleteEvent(data));
-
-    } catch (e, s){
+    try {
+      db = await _openDB();
+      await storeRef.delete(db,
+          finder: Finder(filter: Filter.byKey(data.id)));
+    } catch (e, s) {
       print(e);
       print(s);
-
     } finally {
-      if(db != null)
-        db.close();
+      if (db != null) db.close();
     }
-
-    return k;
   }
 
-  Future<dynamic> deleteAll() async {
-    List<dynamic> keys;
-    try{
-      List<T> items = await list();
-      keys = <dynamic>[];
+  String dataString(T data) {
+    return "(${data.id?.toString()} -> $data)";
+  }
 
-      for(T t in items){
-        dynamic key = delete(t);
-        if(key != null)
-          keys.add(key);
-      }
-
-    } catch(e, s){
+  Future<int> deleteAll() async {
+    int count;
+    try {
+      var db = await _openDB();
+      count = await storeRef.delete(db);
+    } catch (e, s) {
       print(e);
       print(s);
-
     }
 
-    return keys;
+    return count;
+  }
+
+  List<T> mapSnapshots(List<RecordSnapshot<dynamic, Map>> snapshots){
+    return snapshots.map<T>((snap) => mapper.fromMap(snap.value)..id = snap.key).toList();
   }
 
   Future<List<T>> list() async {
@@ -85,52 +92,43 @@ class Storage<T> {
     List<T> dataList;
 
     try {
-      db = await open();
-      List<Record> records = await db.findRecords(Finder());
-      dataList = <T>[];
-
-      for (Record r in records) {
-        r.value["id"] = r.key;
-        T data = mapper.fromMap(r.value);
-        dataList.add(data);
-      }
-
-    } catch(e, s){
+      db = await _openDB();
+      List<RecordSnapshot> snapshots = await storeRef.find(db);
+      return mapSnapshots(snapshots);
+    } catch (e, s) {
       print(e);
       print(s);
-
     } finally {
-      if(db != null)
-        db.close();
+      if (db != null) db.close();
     }
 
     return dataList;
   }
 
-  Future<Database> open() async {
+  Future<Database> _openDB() async {
     Directory appDocDirectory = await getApplicationDocumentsDirectory();
     return databaseFactoryIo.openDatabase(appDocDirectory.path + "/" + dbName);
   }
+
+  StoreRef<dynamic, Map> get storeRef => StoreRef<dynamic, Map>(storeName);
 
   dynamic save(T data) async {
     dynamic result;
     Database db;
 
     try {
-      db = await open();
-      result = await db.put(mapper.toMap(data));
+      db = await _openDB();
+      result = await storeRef.add(db, mapper.toMap(data));
 
-      if(result != null)
-       _eventsController.add(SaveEvent(data));
-
+      if (result != null) {
+        data.id = result;
+        _eventsController.add(SaveEvent(data));
+      }
     } catch (e, s) {
       print(e.toString());
       print(s.toString());
-
     } finally {
-      if(db != null)
-        db.close();
-
+      if (db != null) db.close();
     }
 
     return result;
